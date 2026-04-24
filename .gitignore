@@ -1,0 +1,39 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+
+# Environment / secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Model artifacts: regeneratable from `uv run python -m nba_predictor.pipelines.run_retrain`.
+# Metadata + metrics live in the `model_runs` table, so we don't version the binaries.
+artifacts/models/*.json
+artifacts/models/*.ubj
+!artifacts/models/.gitkeep
+
+# Local scratch (prefer Supabase as the store)
+*.sqlite
+*.db
