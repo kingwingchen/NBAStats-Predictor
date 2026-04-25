@@ -19,12 +19,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from datetime import date
 
 import pandas as pd
 from nba_api.stats.endpoints import (
     commonallplayers,
     leaguedashteamstats,
     playergamelogs,
+    scoreboardv2,
 )
 from tenacity import (
     before_sleep_log,
@@ -135,6 +137,52 @@ class NBAClient:
             season=season,
             measure_type_detailed_defense="Advanced",
             per_mode_detailed="PerGame",
+            timeout=self.request_timeout,
+        )
+        return endpoint.get_data_frames()[0]
+
+    @retry(
+        retry=retry_if_exception_type(_RETRYABLE_EXC),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    def get_scoreboard(self, game_date: date) -> pd.DataFrame:
+        """Return the GameHeader resultset for game_date from ScoreboardV2.
+
+        Each row is one scheduled game. Key columns: GAME_ID, HOME_TEAM_ID,
+        VISITOR_TEAM_ID. Returns an empty DataFrame when no games are scheduled
+        (off-season, rest days).
+        """
+        self._throttle()
+        endpoint = scoreboardv2.ScoreboardV2(
+            game_date=game_date.strftime("%m/%d/%Y"),
+            timeout=self.request_timeout,
+        )
+        return endpoint.get_data_frames()[0]
+
+    @retry(
+        retry=retry_if_exception_type(_RETRYABLE_EXC),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    def get_player_game_logs_for_dates(
+        self, date_from: date, date_to: date, season: str
+    ) -> pd.DataFrame:
+        """Player game logs for a date range within one season.
+
+        `season` must be the NBA season string covering date_from (e.g.
+        "2024-25"). Dates are formatted MM/DD/YYYY per nba_api convention.
+        Returns an empty DataFrame when no games were played in the range.
+        """
+        self._throttle()
+        endpoint = playergamelogs.PlayerGameLogs(
+            season_nullable=season,
+            date_from_nullable=date_from.strftime("%m/%d/%Y"),
+            date_to_nullable=date_to.strftime("%m/%d/%Y"),
             timeout=self.request_timeout,
         )
         return endpoint.get_data_frames()[0]
