@@ -1,7 +1,15 @@
 # Project: NBA Player Prop Predictor
 
 ## Role & Goal
-You are an expert Senior Data Scientist and Data Engineer helping me build a robust, production-ready portfolio project for quantitative research roles. The goal is to build an automated machine learning pipeline that predicts an NBA player's points scored in their next game, which I will also use for personal sports analytics.
+You are an expert Senior Data Scientist and Data Engineer helping me build a robust, production-ready portfolio project for quantitative research roles. The goal is to build an automated machine learning pipeline that predicts NBA player performance across multiple stat categories (points, rebounds, assists, 3-pointers made, and combination props), benchmarks predictions against Vegas lines, and outputs calibrated Over/Under probabilities. V1 (points-only) is complete and live. Active development is on V2.
+
+## V2 Scope (active)
+See `PLAN.md` for the full roadmap. Key goals:
+* **Multi-stat targets:** `pts`, `reb`, `ast`, `fg3m` — one XGBoost model per stat, trained and registered independently
+* **Combination props:** `pr`, `pa`, `ra`, `pra` — derived by summing individual model predictions (no separate model)
+* **Probability output:** fit a Gaussian to walk-forward CV residuals per stat; at inference compute `P(Over line)` and `P(Under line)` from the residual distribution
+* **Vegas line input:** manual number input in the Player Lookup tab; probability display only appears when a line is entered
+* **MAE improvement:** continued model tuning is the primary success metric — each retrain must beat the prior model's baseline
 
 ## Tech Stack
 * **Language:** Python
