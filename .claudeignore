@@ -1,0 +1,35 @@
+# .claudeignore — files excluded from Claude Code's context window
+# Syntax mirrors .gitignore. Use this to keep the context lean:
+# large auto-generated files, secrets, and binary artifacts that
+# Claude doesn't need to read to answer questions about the codebase.
+
+# Lock file — 250KB of auto-generated dependency pins; not useful context
+uv.lock
+
+# Virtual environment
+.venv/
+
+# Model binaries — regeneratable; not human-readable
+artifacts/
+
+# Secrets — should never be read
+.env
+.env.local
+
+# OS / editor noise
+.DS_Store
+.vscode/
+.idea/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+*.py[oc]
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local Claude session state (permissions, output style overrides)
+.claude/

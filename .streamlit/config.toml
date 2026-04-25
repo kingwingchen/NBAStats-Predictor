@@ -1,0 +1,12 @@
+[server]
+# Streamlit Community Cloud reads this file; headless=true prevents it
+# from trying to open a browser on the server.
+headless = true
+port = 8501
+
+[theme]
+primaryColor = "#e8643c"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1e2330"
+textColor = "#fafafa"
+font = "sans serif"

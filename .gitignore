@@ -37,3 +37,7 @@ artifacts/models/*.ubj
 # Local scratch (prefer Supabase as the store)
 *.sqlite
 *.db
+
+# Claude Code local session state (permissions, output style, MCP overrides).
+# CLAUDE.md is intentionally tracked — it's project-level instructions.
+.claude/
