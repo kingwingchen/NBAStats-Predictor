@@ -462,6 +462,7 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "sqlalchemy" },
     { name = "streamlit" },
+    { name = "tenacity" },
     { name = "xgboost" },
 ]
 
@@ -483,6 +484,7 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "sqlalchemy", specifier = ">=2.0.49" },
     { name = "streamlit", specifier = ">=1.56.0" },
+    { name = "tenacity", specifier = ">=9.1.4" },
     { name = "xgboost", specifier = ">=3.2.0" },
 ]
 
