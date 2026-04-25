@@ -33,6 +33,7 @@ def get_engine() -> Engine:
         pool_size=5,  # Supabase free tier allows ~60; stay well under
         max_overflow=5,
         future=True,
+        connect_args={"sslmode": "require"},  # Supabase enforces SSL
     )
 
 
