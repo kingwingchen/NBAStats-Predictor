@@ -83,6 +83,13 @@ FEATURE_COLS = [
     "pts",
 ]  # fmt: skip
 
+# Feature columns fed to the model (identifiers and target excluded).
+# Imported by model/train.py and model/predict.py so there is one source
+# of truth for what the model actually sees.
+X_COLS = [
+    c for c in FEATURE_COLS if c not in {"player_id", "game_id", "game_date", "season", "pts"}
+]
+
 
 # ----------------------------------------------------------------------- loaders
 
