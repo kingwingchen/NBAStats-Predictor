@@ -27,3 +27,30 @@ dev = [
     "pytest>=9.0.3",
     "ruff>=0.15.12",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["notebooks", ".venv", "artifacts"]
+
+[tool.ruff.lint]
+# Sensible default rule set: pyflakes (F), pycodestyle (E/W), isort (I),
+# pyupgrade (UP), bugbear (B), comprehensions (C4), simplify (SIM).
+# Keep it tight — lint noise erodes trust in the signal.
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",  # line too long — formatter owns wrapping
+    "B008",  # function call in default arg — common/safe for FastAPI/Typer-style code
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests import fixtures with patterns ruff doesn't like; keep them readable.
+"tests/**" = ["B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"

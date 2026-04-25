@@ -3,7 +3,16 @@
     "allow": [
       "Bash(uv init *)",
       "Bash(uv add *)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Bash(claude mcp *)",
+      "Bash(npx *)",
+      "Bash(command -v node npm npx)",
+      "Bash(npm --version)",
+      "Bash(git add *)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
 }
