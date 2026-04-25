@@ -1,0 +1,78 @@
+name: Biweekly Retrain
+
+# Runs every Monday at 10 AM ET (14:00 UTC).
+# The "biweekly" cadence is enforced by the week-check step below:
+# ISO week numbers that are even trigger a retrain; odd weeks exit early.
+# This avoids a separate scheduling mechanism while keeping the intent clear.
+# Manual dispatch always runs regardless of week number.
+on:
+  schedule:
+    - cron: '0 14 * * 1'
+  workflow_dispatch:
+    inputs:
+      n_trials:
+        description: 'Optuna trial count (default 50; use 5 for a fast smoke test)'
+        required: false
+        default: '50'
+
+jobs:
+  retrain:
+    name: Retrain XGBoost + register artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check if this is a retrain week
+        id: week-check
+        # ISO week number: even weeks retrain, odd weeks skip.
+        # workflow_dispatch always proceeds (GITHUB_EVENT_NAME != schedule).
+        run: |
+          WEEK=$(date +%V)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || (( WEEK % 2 == 0 )); then
+            echo "should_retrain=true" >> "$GITHUB_OUTPUT"
+            echo "Week $WEEK — proceeding with retrain"
+          else
+            echo "should_retrain=false" >> "$GITHUB_OUTPUT"
+            echo "Week $WEEK — odd week, skipping retrain"
+          fi
+
+      - name: Checkout
+        if: steps.week-check.outputs.should_retrain == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up uv + Python
+        if: steps.week-check.outputs.should_retrain == 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        if: steps.week-check.outputs.should_retrain == 'true'
+        run: uv sync --all-groups
+
+      - name: Run retrain pipeline
+        if: steps.week-check.outputs.should_retrain == 'true'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          N_TRIALS="${{ github.event.inputs.n_trials || '50' }}"
+          uv run python -c "
+          from nba_predictor.pipelines.run_retrain import run_retrain
+          import sys
+          result = run_retrain(n_trials=int('$N_TRIALS'))
+          print('cv_mae:', result['cv_mae'])
+          print('baseline_mae:', result['baseline_mae'])
+          print('artifact_path:', result['artifact_path'])
+          beats = result['cv_mae'] < result['baseline_mae']
+          print('beats_baseline:', beats)
+          sys.exit(0 if beats else 1)
+          "
+
+      - name: Upload model artifact
+        if: steps.week-check.outputs.should_retrain == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifact-${{ github.run_id }}
+          path: artifacts/models/
+          # Retain for 90 days — the canonical record lives in model_runs DB table
+          retention-days: 90

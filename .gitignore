@@ -41,3 +41,6 @@ artifacts/models/*.ubj
 # Claude Code local session state (permissions, output style, MCP overrides).
 # CLAUDE.md is intentionally tracked — it's project-level instructions.
 .claude/
+
+# MCP server config — contains project-specific refs; copy .mcp.json.example
+.mcp.json

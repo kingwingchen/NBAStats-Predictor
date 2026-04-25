@@ -1,0 +1,41 @@
+name: Daily Ingest + Inference
+
+# Runs at 9 AM ET (13:00 UTC) every day.
+# Manual dispatch lets you backfill a specific date or re-run after an outage.
+on:
+  schedule:
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: 'Override date (YYYY-MM-DD). Defaults to today when blank.'
+        required: false
+        default: ''
+
+jobs:
+  run-daily:
+    name: Ingest → Backfill actuals → Predict tonight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run daily pipeline
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -n "${{ github.event.inputs.target_date }}" ]; then
+            uv run python -m nba_predictor.pipelines.run_daily "${{ github.event.inputs.target_date }}"
+          else
+            uv run python -m nba_predictor.pipelines.run_daily
+          fi
