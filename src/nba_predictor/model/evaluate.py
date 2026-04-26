@@ -20,50 +20,58 @@ from sklearn.metrics import mean_absolute_error
 logger = logging.getLogger(__name__)
 
 
-def compute_baselines(df: pd.DataFrame) -> dict[str, float]:
+def compute_baselines(df: pd.DataFrame, stat: str = "pts") -> dict[str, float]:
     """Compute MAE for naive baselines on rows that have both target and feature.
 
     Baselines use the pre-computed feature columns (already shift(1)-lagged)
     as predictions, so they are directly comparable to the model's output —
     no separate leakage concern.
+
+    Parameters
+    ----------
+    stat:
+        Target stat column name ('pts', 'reb', 'ast', 'fg3m'). Baselines
+        are derived from the matching season_avg_{stat} and roll10_{stat} columns.
     """
     results = {}
-    target = df["pts"].dropna()
+    target = df[stat].dropna()
 
-    for col in ("season_avg_pts", "roll10_pts"):
-        shared = df[["pts", col]].dropna()
+    for col in (f"season_avg_{stat}", f"roll10_{stat}"):
+        shared = df[[stat, col]].dropna()
         if len(shared) < 100:
             logger.warning("%s: fewer than 100 non-NaN rows — baseline may be unreliable", col)
-        results[col] = float(mean_absolute_error(shared["pts"], shared[col]))
+        results[col] = float(mean_absolute_error(shared[stat], shared[col]))
 
     logger.info(
-        "Baselines — season_avg_pts: %.3f MAE, roll10_pts: %.3f MAE (n=%d rows with target)",
-        results.get("season_avg_pts", float("nan")),
-        results.get("roll10_pts", float("nan")),
+        "Baselines [%s] — season_avg: %.3f MAE, roll10: %.3f MAE (n=%d rows with target)",
+        stat,
+        results.get(f"season_avg_{stat}", float("nan")),
+        results.get(f"roll10_{stat}", float("nan")),
         len(target),
     )
     return results
 
 
-def evaluate_model(model, df: pd.DataFrame) -> float:
+def evaluate_model(model, df: pd.DataFrame, stat: str = "pts") -> float:
     """Compute overall MAE of a fitted model on df.
 
-    Drops rows where any X_COL or pts is NaN so the comparison is
-    apples-to-apples with the baseline computation.
+    Drops rows where any feature col or the target is NaN so the comparison
+    is apples-to-apples with the baseline computation.
     """
-    from nba_predictor.features.build import X_COLS
+    from nba_predictor.features.build import STAT_X_COLS
 
-    clean = df.dropna(subset=["pts", *X_COLS])
-    preds = model.predict(clean[X_COLS])
-    mae = float(mean_absolute_error(clean["pts"], preds))
-    logger.info("Model overall MAE: %.4f (n=%d rows)", mae, len(clean))
+    x_cols = STAT_X_COLS[stat]
+    clean = df.dropna(subset=[stat, *x_cols])
+    preds = model.predict(clean[x_cols])
+    mae = float(mean_absolute_error(clean[stat], preds))
+    logger.info("Model overall MAE [%s]: %.4f (n=%d rows)", stat, mae, len(clean))
     return mae
 
 
-def print_report(cv_mae: float, baselines: dict[str, float], n_folds: int) -> None:
+def print_report(cv_mae: float, baselines: dict[str, float], n_folds: int, stat: str = "pts") -> None:
     """Print a formatted comparison table to stdout."""
-    season_avg_mae = baselines.get("season_avg_pts", float("nan"))
-    roll10_mae = baselines.get("roll10_pts", float("nan"))
+    season_avg_mae = baselines.get(f"season_avg_{stat}", float("nan"))
+    roll10_mae = baselines.get(f"roll10_{stat}", float("nan"))
 
     beat_season = cv_mae < season_avg_mae
     beat_roll10 = cv_mae < roll10_mae
@@ -71,11 +79,11 @@ def print_report(cv_mae: float, baselines: dict[str, float], n_folds: int) -> No
     lines = [
         "",
         "─" * 48,
-        "  Walk-forward CV MAE Report",
+        f"  Walk-forward CV MAE Report  [{stat}]",
         "─" * 48,
-        f"  XGBoost CV MAE  : {cv_mae:>7.3f} pts  ({n_folds} folds)",
-        f"  Baseline roll10  : {roll10_mae:>7.3f} pts  {'✓ beaten' if beat_roll10 else '✗ NOT beaten'}",
-        f"  Baseline season  : {season_avg_mae:>7.3f} pts  {'✓ beaten' if beat_season else '✗ NOT beaten'}",
+        f"  XGBoost CV MAE  : {cv_mae:>7.3f}  ({n_folds} folds)",
+        f"  Baseline roll10  : {roll10_mae:>7.3f}  {'✓ beaten' if beat_roll10 else '✗ NOT beaten'}",
+        f"  Baseline season  : {season_avg_mae:>7.3f}  {'✓ beaten' if beat_season else '✗ NOT beaten'}",
         "─" * 48,
     ]
 

@@ -46,6 +46,9 @@ SELECT
     pgl.pts,
     pgl.min,
     pgl.fga,
+    pgl.reb,
+    pgl.ast,
+    pgl.fg3m,
     g.game_date,
     g.season,
     g.home_team_id,
@@ -67,28 +70,68 @@ WHERE g.game_date <= :as_of
 # selector so callers always get a predictable, documented shape.
 FEATURE_COLS = [
     "player_id", "game_id", "game_date", "season",
-    # Rolling windows (cross-season, shift(1))
+    # Rolling windows (cross-season, shift(1)) — pts/min/fga from v1; reb/ast/fg3m added v2
     "roll5_pts",  "roll10_pts",
     "roll5_min",  "roll10_min",
     "roll5_fga",  "roll10_fga",
+    "roll5_reb",  "roll10_reb",
+    "roll5_ast",  "roll10_ast",
+    "roll5_fg3m", "roll10_fg3m",
     # Season-scoped expanding stats (within-season shift(1), reset each season)
     "season_avg_pts", "season_avg_min",
+    "season_avg_reb", "season_avg_ast", "season_avg_fg3m",
     "games_played_season",
     # Context features
     "rest_days", "is_back_to_back",
     "is_home",
     "opp_def_rating_roll10", "opp_pace_roll10",
     "is_cold_start",
-    # Target (pts for this game; NaN on inference rows before game is played)
-    "pts",
+    # Stat targets (NaN on inference rows before the game is played)
+    "pts", "reb", "ast", "fg3m",
 ]  # fmt: skip
 
-# Feature columns fed to the model (identifiers and target excluded).
-# Imported by model/train.py and model/predict.py so there is one source
-# of truth for what the model actually sees.
-X_COLS = [
-    c for c in FEATURE_COLS if c not in {"player_id", "game_id", "game_date", "season", "pts"}
+# Shared context columns referenced by every per-stat feature set.
+_CONTEXT_COLS: list[str] = [
+    "rest_days", "is_back_to_back", "is_home",
+    "opp_def_rating_roll10", "opp_pace_roll10",
+    "is_cold_start", "games_played_season",
 ]
+
+# Per-stat feature sets for Phase B per-stat models.
+# Each model only sees the rolling/season features most predictive for its
+# target, plus the shared context columns. Keeping feature sets tight
+# reduces overfitting and makes SHAP explanations cleaner in interviews.
+STAT_X_COLS: dict[str, list[str]] = {
+    "pts": [
+        "roll5_pts", "roll10_pts",
+        "roll5_min", "roll10_min",
+        "roll5_fga", "roll10_fga",
+        "season_avg_pts", "season_avg_min",
+        *_CONTEXT_COLS,
+    ],
+    "reb": [
+        "roll5_reb", "roll10_reb",
+        "roll5_min", "roll10_min",
+        "season_avg_reb", "season_avg_min",
+        *_CONTEXT_COLS,
+    ],
+    "ast": [
+        "roll5_ast", "roll10_ast",
+        "roll5_min", "roll10_min",
+        "season_avg_ast", "season_avg_min",
+        *_CONTEXT_COLS,
+    ],
+    "fg3m": [
+        "roll5_fg3m", "roll10_fg3m",
+        "roll5_min", "roll10_min",
+        "season_avg_fg3m", "season_avg_min",
+        *_CONTEXT_COLS,
+    ],
+}
+
+# Backward-compatible alias — V1 code that imports X_COLS continues to work
+# unchanged. Phase B will migrate callers to STAT_X_COLS[stat] directly.
+X_COLS: list[str] = STAT_X_COLS["pts"]
 
 
 # ----------------------------------------------------------------------- loaders
@@ -114,10 +157,12 @@ def _player_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values(["player_id", "game_date"]).reset_index(drop=True)
 
     # --- Cross-season lags (for roll5 / roll10 spanning season boundaries) ---
-    for col in ("pts", "min", "fga"):
+    # reb/ast/fg3m added in v2; cross-season so a player's form at game 1 of a
+    # new season reflects their end-of-last-season shape.
+    for col in ("pts", "min", "fga", "reb", "ast", "fg3m"):
         df[f"_x_{col}"] = df.groupby("player_id")[col].shift(1)
 
-    for stat in ("pts", "min", "fga"):
+    for stat in ("pts", "min", "fga", "reb", "ast", "fg3m"):
         lag = f"_x_{stat}"
         df[f"roll{short_w}_{stat}"] = df.groupby("player_id")[lag].transform(
             lambda s: s.rolling(short_w, min_periods=1).mean()
@@ -127,15 +172,15 @@ def _player_features(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     # --- Within-season lags (season stats must reset at each new season) ---
-    for col in ("pts", "min"):
+    # reb/ast/fg3m added in v2 to support per-stat season averages.
+    for col in ("pts", "min", "reb", "ast", "fg3m"):
         df[f"_s_{col}"] = df.groupby(["player_id", "season"])[col].shift(1)
 
-    df["season_avg_pts"] = df.groupby(["player_id", "season"])["_s_pts"].transform(
-        lambda s: s.expanding(min_periods=1).mean()
-    )
-    df["season_avg_min"] = df.groupby(["player_id", "season"])["_s_min"].transform(
-        lambda s: s.expanding(min_periods=1).mean()
-    )
+    for stat in ("pts", "min", "reb", "ast", "fg3m"):
+        df[f"season_avg_{stat}"] = df.groupby(["player_id", "season"])[f"_s_{stat}"].transform(
+            lambda s: s.expanding(min_periods=1).mean()
+        )
+
     # games_played_season = count of non-null season-lag rows = games before current
     df["games_played_season"] = df.groupby(["player_id", "season"])["_s_pts"].transform(
         lambda s: s.notna().cumsum()
@@ -195,7 +240,8 @@ def build_features(as_of_date: date | None = None) -> pd.DataFrame:
     -------
     DataFrame with columns per `FEATURE_COLS`. One row per (player, game).
     Feature columns are computed from games strictly before each row's
-    game_date (shift(1) guarantee). `pts` is the prediction target.
+    game_date (shift(1) guarantee). `pts`, `reb`, `ast`, `fg3m` are the
+    prediction targets; each per-stat model selects its own via STAT_X_COLS.
     """
     if as_of_date is None:
         as_of_date = date.today()
@@ -233,10 +279,10 @@ if __name__ == "__main__":
             [
                 "player_id",
                 "game_date",
-                "roll10_pts",
-                "season_avg_pts",
+                "roll10_pts", "roll10_reb", "roll10_ast", "roll10_fg3m",
+                "season_avg_pts", "season_avg_reb",
                 "opp_def_rating_roll10",
-                "pts",
+                "pts", "reb", "ast", "fg3m",
             ]
         ]
         .tail(10)

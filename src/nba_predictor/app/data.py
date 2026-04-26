@@ -75,7 +75,10 @@ player_stats AS (
 SELECT
     p.player_id,
     COALESCE(pl.full_name, p.player_id::text)  AS full_name,
-    ROUND(p.predicted_pts::numeric, 1)          AS predicted_pts,
+    ROUND(p.predicted_pts::numeric, 1)           AS predicted_pts,
+    ROUND(p.predicted_reb::numeric, 1)           AS predicted_reb,
+    ROUND(p.predicted_ast::numeric, 1)           AS predicted_ast,
+    ROUND(p.predicted_fg3m::numeric, 1)          AS predicted_fg3m,
     p.prediction_date,
     p.game_id,
     ROUND(ps.roll10_pts::numeric, 1)            AS roll10_pts,
@@ -109,6 +112,9 @@ _HISTORY_SQL = """
 WITH ranked AS (
     SELECT
         pgl.pts,
+        pgl.reb,
+        pgl.ast,
+        pgl.fg3m,
         pgl.min   AS minutes,
         pgl.fga,
         g.game_date,
@@ -118,7 +124,7 @@ WITH ranked AS (
     JOIN games g ON g.game_id = pgl.game_id
     WHERE pgl.player_id = :player_id
 )
-SELECT game_date, pts, minutes, fga, season
+SELECT game_date, pts, reb, ast, fg3m, minutes, fga, season
 FROM ranked
 WHERE rn <= 30
 ORDER BY game_date ASC
@@ -208,52 +214,92 @@ def load_opp_season_stats(opp_team_id: int) -> dict:
     }
 
 
+@st.cache_data(ttl=3600)
+def load_residual_params_cached(stat: str) -> tuple[float | None, float | None]:
+    """Return (residual_mean, residual_std) for the latest model of this stat.
+
+    Cached so repeated calls (e.g. while the user adjusts the Vegas line slider)
+    do not hit the database. Returns (None, None) when no model is trained yet.
+    """
+    from nba_predictor.model.calibration import load_residual_params
+    return load_residual_params(stat)
+
+
+# Mapping: combo prop key → tuple of base stats that compose it
+_STAT_COMBOS: dict[str, tuple[str, ...]] = {
+    "pr":  ("pts", "reb"),
+    "pa":  ("pts", "ast"),
+    "ra":  ("reb", "ast"),
+    "pra": ("pts", "reb", "ast"),
+}
+# Primary base stat used to choose the feature set for combo props
+_PRIMARY_BASE: dict[str, str] = {
+    "pr": "pts", "pa": "pts", "ra": "reb", "pra": "pts",
+}
+
+
 def compute_player_feature_snapshot(
     history_df: pd.DataFrame,
+    stat: str = "pts",
     rest_days: int | None = None,
     is_home: int | None = None,
     opp_stats: dict | None = None,
 ) -> dict[str, float]:
     """Derive approximate feature values from a player's recent game history.
 
-    Mirrors X_COLS from features/build.py using the same shift(1) convention:
+    Mirrors STAT_X_COLS from features/build.py using the same shift(1) convention:
     roll windows use games BEFORE the most recent played game (iloc[:-1]),
     matching what the model actually received at inference time.
 
-    Not cached — called with an already-cached history_df, so the underlying
-    DB read is already free. Pure pandas, no I/O.
+    For combo props (pr/pa/ra/pra) the feature set of the primary base stat is
+    shown (e.g. pts features for 'pr' and 'pra').
+
+    Not cached — called with an already-cached history_df. Pure pandas, no I/O.
     """
     if history_df.empty:
         return {}
 
     opp_stats = opp_stats or {}
+    base_stat = _PRIMARY_BASE.get(stat, stat)  # one of pts/reb/ast/fg3m
+
     current_season = history_df["season"].iloc[-1]
     season_rows = history_df[history_df["season"] == current_season]
     # Exclude the most recent game to replicate the within-season shift(1)
     season_prev = season_rows.iloc[:-1] if len(season_rows) > 1 else pd.DataFrame()
 
-    # All lags use iloc[:-1] — games before the most recent played game
-    pts  = history_df["pts"].iloc[:-1]
     mins = history_df["minutes"].iloc[:-1]
     fga  = history_df["fga"].iloc[:-1]
+    # Use the base-stat column (pts/reb/ast/fg3m); fall back to empty Series if missing
+    stat_series = (
+        history_df[base_stat].iloc[:-1]
+        if base_stat in history_df.columns
+        else pd.Series([], dtype=float)
+    )
+    season_stat = (
+        season_prev[base_stat]
+        if (not season_prev.empty and base_stat in season_prev.columns)
+        else pd.Series([], dtype=float)
+    )
 
     def _safe_mean(s: pd.Series) -> float:
         return round(float(s.mean()), 1) if not s.empty else float("nan")
 
     snapshot: dict[str, float] = {
-        "roll5_pts":         _safe_mean(pts.tail(5)),
-        "roll10_pts":        _safe_mean(pts.tail(10)),
-        "roll5_min":         _safe_mean(mins.tail(5)),
-        "roll10_min":        _safe_mean(mins.tail(10)),
-        "roll5_fga":         _safe_mean(fga.tail(5)),
-        "roll10_fga":        _safe_mean(fga.tail(10)),
-        "season_avg_pts":    _safe_mean(season_prev["pts"]) if not season_prev.empty else float("nan"),
-        "season_avg_min":    _safe_mean(season_prev["minutes"]) if not season_prev.empty else float("nan"),
-        "games_played_season": float(len(season_prev)),
-        "rest_days":         float(rest_days) if rest_days is not None else float("nan"),
-        "is_back_to_back":   float(1 if rest_days == 1 else 0) if rest_days is not None else float("nan"),
-        "is_home":           float(is_home) if is_home is not None else float("nan"),
-        "is_cold_start":     float(1 if len(season_prev) < 10 else 0),
+        f"roll5_{base_stat}":        _safe_mean(stat_series.tail(5)),
+        f"roll10_{base_stat}":       _safe_mean(stat_series.tail(10)),
+        "roll5_min":                 _safe_mean(mins.tail(5)),
+        "roll10_min":                _safe_mean(mins.tail(10)),
+        f"season_avg_{base_stat}":   _safe_mean(season_stat),
+        "season_avg_min":            _safe_mean(season_prev["minutes"]) if not season_prev.empty else float("nan"),
+        "games_played_season":       float(len(season_prev)),
+        "rest_days":                 float(rest_days) if rest_days is not None else float("nan"),
+        "is_back_to_back":           float(1 if rest_days == 1 else 0) if rest_days is not None else float("nan"),
+        "is_home":                   float(is_home) if is_home is not None else float("nan"),
+        "is_cold_start":             float(1 if len(season_prev) < 10 else 0),
         **{k: float(v) for k, v in opp_stats.items()},
     }
+    # pts adds fga features (shots attempted = usage proxy)
+    if base_stat == "pts":
+        snapshot["roll5_fga"]  = _safe_mean(fga.tail(5))
+        snapshot["roll10_fga"] = _safe_mean(fga.tail(10))
     return snapshot

@@ -5,6 +5,7 @@ You are an expert Senior Data Scientist and Data Engineer helping me build a rob
 
 ## V2 Scope (active)
 See `PLAN.md` for the full roadmap. Key goals:
+* **UI-Update:** Change the Player Lookup tab from line graphs to Pickfinder-style bar charts, featuring a horizontal line for the prediction/Vegas line and conditional red/green coloring for hits/misses.
 * **Multi-stat targets:** `pts`, `reb`, `ast`, `fg3m` — one XGBoost model per stat, trained and registered independently
 * **Combination props:** `pr`, `pa`, `ra`, `pra` — derived by summing individual model predictions (no separate model)
 * **Probability output:** fit a Gaussian to walk-forward CV residuals per stat; at inference compute `P(Over line)` and `P(Under line)` from the residual distribution

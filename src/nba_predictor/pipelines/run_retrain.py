@@ -25,8 +25,11 @@ from datetime import date
 logger = logging.getLogger(__name__)
 
 
-def run_retrain(as_of_date: date | None = None, *, n_trials: int = 50) -> dict:
-    """Run the full retrain pipeline. Returns a summary dict.
+_STATS = ("pts", "reb", "ast", "fg3m")
+
+
+def run_retrain(as_of_date: date | None = None, *, n_trials: int = 50) -> dict[str, dict]:
+    """Train one XGBoost model per stat and register all in model_runs.
 
     Parameters
     ----------
@@ -36,13 +39,21 @@ def run_retrain(as_of_date: date | None = None, *, n_trials: int = 50) -> dict:
     n_trials:
         Optuna trial count. 50 is the production default; pass 5 for a
         fast smoke test (``--fast`` CLI flag).
+
+    Returns
+    -------
+    Dict keyed by stat name, each value is the run_training summary dict.
     """
     from nba_predictor.model.train import run_training
 
-    logger.info("=== run_retrain as_of=%s, n_trials=%d ===", as_of_date or "today", n_trials)
-    summary = run_training(as_of_date=as_of_date, n_trials=n_trials)
-    logger.info("run_retrain complete: %s", summary)
-    return summary
+    logger.info("=== run_retrain as_of=%s, n_trials=%d, stats=%s ===", as_of_date or "today", n_trials, _STATS)
+    summaries: dict[str, dict] = {}
+    for stat in _STATS:
+        logger.info("--- Training stat=%s ---", stat)
+        summaries[stat] = run_training(stat=stat, as_of_date=as_of_date, n_trials=n_trials)
+
+    logger.info("run_retrain complete — cv_maes: %s", {s: f"{summaries[s]['cv_mae']:.4f}" for s in _STATS})
+    return summaries
 
 
 if __name__ == "__main__":
@@ -52,8 +63,10 @@ if __name__ == "__main__":
     _logging.basicConfig(level=_logging.INFO, format="%(levelname)s %(name)s | %(message)s")
 
     fast = "--fast" in sys.argv
-    result = run_retrain(n_trials=5 if fast else 50)
+    results = run_retrain(n_trials=5 if fast else 50)
 
     print("\n=== Retrain complete ===")
-    for k, v in result.items():
-        print(f"  {k}: {v}")
+    for stat, summary in results.items():
+        print(f"\n  [{stat}]")
+        for k, v in summary.items():
+            print(f"    {k}: {v}")

@@ -75,7 +75,10 @@ CREATE TABLE IF NOT EXISTS model_runs (
     cv_mae          NUMERIC       NOT NULL,
     baseline_mae    NUMERIC,
     params_json     JSONB,
-    artifact_path   TEXT          NOT NULL
+    artifact_path   TEXT          NOT NULL,
+    stat            TEXT          NOT NULL DEFAULT 'pts',  -- which target this model predicts
+    residual_mean   NUMERIC,  -- Phase C: Gaussian residual fit for P(Over/Under) calibration
+    residual_std    NUMERIC
 );
 
 CREATE INDEX IF NOT EXISTS idx_model_runs_trained_at  ON model_runs (trained_at DESC);
@@ -87,6 +90,9 @@ CREATE TABLE IF NOT EXISTS predictions (
     game_id          TEXT       NOT NULL,
     prediction_date  DATE       NOT NULL,
     predicted_pts    NUMERIC    NOT NULL,
+    predicted_reb    NUMERIC,   -- v2: populated once reb model is trained
+    predicted_ast    NUMERIC,   -- v2: populated once ast model is trained
+    predicted_fg3m   NUMERIC,   -- v2: populated once fg3m model is trained
     actual_pts       INTEGER,   -- backfilled the morning after the game
     UNIQUE (model_run_id, player_id, game_id)
 );

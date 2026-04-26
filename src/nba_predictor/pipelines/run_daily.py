@@ -22,8 +22,12 @@ import psycopg2.extras
 from sqlalchemy import text
 
 from nba_predictor.db.connection import get_engine
-from nba_predictor.features.build import X_COLS, build_features
+from nba_predictor.features.build import STAT_X_COLS, build_features
 from nba_predictor.features.player_universe import get_qualifying_players
+
+# Union of every per-stat feature set — inference rows must carry all columns
+# so that any stat model can score them with no KeyError.
+_ALL_X_COLS: list[str] = list(dict.fromkeys(c for cols in STAT_X_COLS.values() for c in cols))
 from nba_predictor.ingest.daily import backfill_actual_pts, ingest_game_date
 from nba_predictor.ingest.nba_client import get_client
 from nba_predictor.model.predict import load_model, predict
@@ -31,10 +35,15 @@ from nba_predictor.model.predict import load_model, predict
 logger = logging.getLogger(__name__)
 
 _PRED_UPSERT_SQL = """
-INSERT INTO predictions (model_run_id, player_id, game_id, prediction_date, predicted_pts)
+INSERT INTO predictions
+    (model_run_id, player_id, game_id, prediction_date,
+     predicted_pts, predicted_reb, predicted_ast, predicted_fg3m)
 VALUES %s
 ON CONFLICT (model_run_id, player_id, game_id) DO UPDATE SET
-    predicted_pts = EXCLUDED.predicted_pts,
+    predicted_pts  = EXCLUDED.predicted_pts,
+    predicted_reb  = EXCLUDED.predicted_reb,
+    predicted_ast  = EXCLUDED.predicted_ast,
+    predicted_fg3m = EXCLUDED.predicted_fg3m,
     prediction_date = EXCLUDED.prediction_date
 """
 
@@ -180,7 +189,7 @@ def build_inference_features(
         logger.info("No qualifying players matched tonight's teams")
         return pd.DataFrame()
 
-    result = pd.DataFrame(rows)[["player_id", "game_id", "game_date", *X_COLS]].reset_index(
+    result = pd.DataFrame(rows)[["player_id", "game_id", "game_date", *_ALL_X_COLS]].reset_index(
         drop=True
     )
     logger.info("Built inference features for %d players", len(result))
@@ -192,7 +201,15 @@ def write_predictions(
     model_run_id: int,
     prediction_date: date,
 ) -> int:
-    """Upsert prediction rows into the predictions table. Returns rows written."""
+    """Upsert prediction rows into the predictions table. Returns rows written.
+
+    Non-pts stat columns (predicted_reb/ast/fg3m) are written as NULL when the
+    column is absent from preds_df or contains NaN — graceful during the period
+    before all 4 stat models have been trained.
+    """
+    def _opt_float(val) -> float | None:
+        return float(val) if val is not None and pd.notna(val) else None
+
     rows = [
         (
             model_run_id,
@@ -200,6 +217,9 @@ def write_predictions(
             str(r.game_id),
             prediction_date,
             float(r.predicted_pts),
+            _opt_float(getattr(r, "predicted_reb",  None)),
+            _opt_float(getattr(r, "predicted_ast",  None)),
+            _opt_float(getattr(r, "predicted_fg3m", None)),
         )
         for r in preds_df.itertuples(index=False)
     ]
@@ -266,14 +286,26 @@ def run_daily(today: date | None = None) -> dict:
             "predictions_written": 0,
         }
 
-    # 6. Load model and predict
-    model, run_id = load_model()
-    if run_id is None:
-        raise RuntimeError("load_model() returned no run_id — check model_runs table")
-    preds_df = predict(features_df, model=model)
+    # 6. Load per-stat models and predict — pts is required, others are optional
+    # (daily pipeline stays runnable before all 4 models are trained).
+    pts_model, pts_run_id = load_model(stat="pts")
+    if pts_run_id is None:
+        raise RuntimeError("load_model(stat='pts') returned no run_id — check model_runs table")
+
+    merged = predict(features_df, stat="pts", model=pts_model)
+    for _stat in ("reb", "ast", "fg3m"):
+        try:
+            _m, _ = load_model(stat=_stat)
+            _stat_preds = predict(features_df, stat=_stat, model=_m)[
+                ["player_id", "game_id", f"predicted_{_stat}"]
+            ]
+            merged = merged.merge(_stat_preds, on=["player_id", "game_id"], how="left")
+        except RuntimeError:
+            logger.info("No trained model for stat=%s yet — predicted_%s will be NULL", _stat, _stat)
+            merged[f"predicted_{_stat}"] = None
 
     # 7. Write to predictions table
-    preds_n = write_predictions(preds_df, run_id, today)
+    preds_n = write_predictions(merged, pts_run_id, today)
 
     summary = {
         "status": "ok",
