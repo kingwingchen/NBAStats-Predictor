@@ -250,11 +250,21 @@ def run_daily(today: date | None = None) -> dict:
 
     logger.info("=== run_daily %s ===", today)
 
-    # 1. Ingest yesterday's completed games
-    games_n, pgl_n = ingest_game_date(yesterday)
+    # 1. Ingest yesterday's completed games — non-fatal: stats.nba.com is flaky
+    # from CI runners. A timeout here should not block tonight's predictions;
+    # the noon safety-net cron will retry and pick up any missed ingest.
+    try:
+        games_n, pgl_n = ingest_game_date(yesterday)
+    except Exception as exc:
+        logger.warning("NBA API ingest failed for %s (%s) — skipping, will retry", yesterday, exc)
+        games_n, pgl_n = 0, 0
 
-    # 2. Backfill actual_pts into yesterday's predictions
-    actuals_n = backfill_actual_pts(yesterday)
+    # 2. Backfill actual_pts into yesterday's predictions (also non-fatal)
+    try:
+        actuals_n = backfill_actual_pts(yesterday)
+    except Exception as exc:
+        logger.warning("Backfill failed for %s (%s) — skipping", yesterday, exc)
+        actuals_n = 0
 
     # 3. Tonight's slate
     tonight_games = get_tonight_games(today)

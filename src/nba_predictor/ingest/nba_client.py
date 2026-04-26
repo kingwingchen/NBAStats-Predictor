@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import date
 
 import pandas as pd
+import requests.exceptions
 from nba_api.stats.endpoints import (
     commonallplayers,
     leaguedashteamstats,
@@ -38,10 +39,33 @@ from tenacity import (
 
 logger = logging.getLogger(__name__)
 
-# nba_api raises requests exceptions; we retry on transient network errors
-# but NOT on stuff like KeyError (which would mean a schema change we need
-# to surface, not silently retry).
-_RETRYABLE_EXC = (TimeoutError, ConnectionError, OSError)
+# stats.nba.com requires these headers — without them GitHub Actions IPs
+# get throttled or blocked. x-nba-stats-* are checked server-side.
+_NBA_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.nba.com/",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.nba.com",
+    "x-nba-stats-origin": "stats",
+    "x-nba-stats-token": "true",
+}
+
+# Include requests.exceptions.ReadTimeout — it's what stats.nba.com raises
+# when it drops the connection, and it doesn't inherit from the built-in
+# TimeoutError so the old tuple silently missed it.
+_RETRYABLE_EXC = (
+    TimeoutError,
+    ConnectionError,
+    OSError,
+    requests.exceptions.ReadTimeout,
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+)
 
 
 @dataclass
@@ -90,6 +114,7 @@ class NBAClient:
         endpoint = commonallplayers.CommonAllPlayers(
             is_only_current_season=int(only_current_season),
             timeout=self.request_timeout,
+            headers=_NBA_HEADERS,
         )
         return endpoint.get_data_frames()[0]
 
@@ -115,6 +140,7 @@ class NBAClient:
         endpoint = playergamelogs.PlayerGameLogs(
             season_nullable=season,
             timeout=self.request_timeout,
+            headers=_NBA_HEADERS,
         )
         return endpoint.get_data_frames()[0]
 
@@ -138,6 +164,7 @@ class NBAClient:
             measure_type_detailed_defense="Advanced",
             per_mode_detailed="PerGame",
             timeout=self.request_timeout,
+            headers=_NBA_HEADERS,
         )
         return endpoint.get_data_frames()[0]
 
@@ -159,6 +186,7 @@ class NBAClient:
         endpoint = scoreboardv2.ScoreboardV2(
             game_date=game_date.strftime("%m/%d/%Y"),
             timeout=self.request_timeout,
+            headers=_NBA_HEADERS,
         )
         return endpoint.get_data_frames()[0]
 
@@ -184,6 +212,7 @@ class NBAClient:
             date_from_nullable=date_from.strftime("%m/%d/%Y"),
             date_to_nullable=date_to.strftime("%m/%d/%Y"),
             timeout=self.request_timeout,
+            headers=_NBA_HEADERS,
         )
         return endpoint.get_data_frames()[0]
 
