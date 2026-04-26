@@ -603,6 +603,12 @@ def main() -> None:
         "Updated daily via GitHub Actions · powered by XGBoost + Supabase."
     )
 
+    with st.sidebar:
+        st.markdown("### Data")
+        if st.button("🔄 Refresh data", help="Clear cached DB queries and reload fresh data"):
+            st.cache_data.clear()
+            st.rerun()
+
     slate_df = load_tonights_slate()
     model_info = load_model_info()
 
