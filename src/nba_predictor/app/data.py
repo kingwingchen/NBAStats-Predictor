@@ -106,8 +106,8 @@ ORDER BY trained_at DESC
 LIMIT 1
 """
 
-# Load 30 games: 20 to display + 10 warm-up rows so the roll10
-# window is fully populated for the very first displayed game.
+# Load 35 games: 20 to display + buffer for roll windows and H2H filtering.
+# opp_team_id is derived from home/away team IDs — used for H2H hit-rate computation.
 _HISTORY_SQL = """
 WITH ranked AS (
     SELECT
@@ -119,15 +119,46 @@ WITH ranked AS (
         pgl.fga,
         g.game_date,
         g.season,
+        CASE WHEN pgl.team_id = g.home_team_id THEN g.away_team_id
+             ELSE g.home_team_id END AS opp_team_id,
         ROW_NUMBER() OVER (ORDER BY g.game_date DESC) AS rn
     FROM player_game_logs pgl
     JOIN games g ON g.game_id = pgl.game_id
     WHERE pgl.player_id = :player_id
 )
-SELECT game_date, pts, reb, ast, fg3m, minutes, fga, season
+SELECT game_date, pts, reb, ast, fg3m, minutes, fga, season, opp_team_id
 FROM ranked
-WHERE rn <= 30
+WHERE rn <= 35
 ORDER BY game_date ASC
+"""
+
+# Bulk variant: loads last-35 logs for a set of players in one round-trip.
+# Player IDs are integers from the DB — string-formatting them is safe.
+_BULK_HISTORY_SQL_TEMPLATE = """
+WITH ranked AS (
+    SELECT
+        pgl.player_id,
+        pgl.pts,
+        pgl.reb,
+        pgl.ast,
+        pgl.fg3m,
+        pgl.min   AS minutes,
+        pgl.fga,
+        g.game_date,
+        g.season,
+        CASE WHEN pgl.team_id = g.home_team_id THEN g.away_team_id
+             ELSE g.home_team_id END AS opp_team_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY pgl.player_id ORDER BY g.game_date DESC
+        ) AS rn
+    FROM player_game_logs pgl
+    JOIN games g ON g.game_id = pgl.game_id
+    WHERE pgl.player_id IN ({ids})
+)
+SELECT player_id, game_date, pts, reb, ast, fg3m, minutes, fga, season, opp_team_id
+FROM ranked
+WHERE rn <= 35
+ORDER BY player_id, game_date ASC
 """
 
 # Season-average opponent defensive rating and pace — used as the
@@ -194,11 +225,32 @@ def load_qualifying_players() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_player_history(player_id: int) -> pd.DataFrame:
-    """Return the last 30 game logs for a player, sorted oldest → newest."""
+    """Return the last 35 game logs for a player, sorted oldest → newest."""
     with get_engine().connect() as conn:
         df = pd.read_sql(text(_HISTORY_SQL), conn, params={"player_id": player_id})
     df["game_date"] = pd.to_datetime(df["game_date"])
     return df
+
+
+@st.cache_data(ttl=3600)
+def load_bulk_player_histories(player_ids: tuple[int, ...]) -> dict[int, pd.DataFrame]:
+    """Return last-35 game logs for multiple players in a single SQL round-trip.
+
+    Accepts a tuple (not list) so the argument is hashable for st.cache_data.
+    Used by the Slate tab to compute hit-rate columns for all players at once
+    without issuing one query per player.
+    """
+    if not player_ids:
+        return {}
+    ids_str = ",".join(str(pid) for pid in player_ids)
+    sql = _BULK_HISTORY_SQL_TEMPLATE.format(ids=ids_str)
+    with get_engine().connect() as conn:
+        df = pd.read_sql(text(sql), conn)
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    result: dict[int, pd.DataFrame] = {}
+    for pid, group in df.groupby("player_id"):
+        result[int(pid)] = group.sort_values("game_date").reset_index(drop=True)
+    return result
 
 
 @st.cache_data(ttl=3600)

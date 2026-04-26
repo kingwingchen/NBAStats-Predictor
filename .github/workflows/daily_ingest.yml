@@ -4,7 +4,8 @@ name: Daily Ingest + Inference
 # Manual dispatch lets you backfill a specific date or re-run after an outage.
 on:
   schedule:
-    - cron: '0 13 * * *'
+    - cron: '0 13 * * *'   # 9 AM ET — primary run after overnight results land
+    - cron: '0 16 * * *'   # 12 PM ET — safety net: re-runs if the 9 AM run failed or missed games
   workflow_dispatch:
     inputs:
       target_date:
@@ -17,6 +18,8 @@ jobs:
     name: Ingest → Backfill actuals → Predict tonight
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # opt in ahead of June 2 forced cutover
 
     steps:
       - name: Checkout
