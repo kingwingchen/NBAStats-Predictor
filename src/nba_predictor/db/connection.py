@@ -27,8 +27,12 @@ def get_engine() -> Engine:
     multiple engines would exhaust Supabase's free-tier connection limit fast
     during backfill.
     """
+    # Strip whitespace (guards against a trailing newline pasted into the
+    # GitHub secret UI) and remap the postgres:// scheme that Supabase emits
+    # to the postgresql:// dialect SQLAlchemy 2.x requires.
+    url = SUPABASE_DB_URL.strip().replace("postgres://", "postgresql://", 1)
     return create_engine(
-        SUPABASE_DB_URL,
+        url,
         pool_pre_ping=True,  # cheap liveness check; avoids stale-conn errors
         pool_size=5,  # Supabase free tier allows ~60; stay well under
         max_overflow=5,
