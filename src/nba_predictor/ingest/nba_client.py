@@ -198,17 +198,25 @@ class NBAClient:
         reraise=True,
     )
     def get_player_game_logs_for_dates(
-        self, date_from: date, date_to: date, season: str
+        self,
+        date_from: date,
+        date_to: date,
+        season: str,
+        season_type: str = "Regular Season",
     ) -> pd.DataFrame:
         """Player game logs for a date range within one season.
 
         `season` must be the NBA season string covering date_from (e.g.
         "2024-25"). Dates are formatted MM/DD/YYYY per nba_api convention.
+        `season_type` controls which game type is fetched — pass "Playoffs"
+        to capture postseason games (the default "Regular Season" returns
+        empty for playoff dates, silently dropping them from the daily ingest).
         Returns an empty DataFrame when no games were played in the range.
         """
         self._throttle()
         endpoint = playergamelogs.PlayerGameLogs(
             season_nullable=season,
+            season_type_nullable=season_type,
             date_from_nullable=date_from.strftime("%m/%d/%Y"),
             date_to_nullable=date_to.strftime("%m/%d/%Y"),
             timeout=self.request_timeout,

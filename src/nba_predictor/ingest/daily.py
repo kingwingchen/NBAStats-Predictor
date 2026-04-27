@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+import pandas as pd
 import psycopg2.extras
 from sqlalchemy import text
 
@@ -73,17 +74,28 @@ def _bulk_upsert(sql: str, rows: list[tuple]) -> None:
 def ingest_game_date(game_date: date) -> tuple[int, int]:
     """Fetch all player game logs for game_date and upsert into DB.
 
+    Queries both "Regular Season" and "Playoffs" season types so that
+    postseason games are captured from mid-April onward. The API silently
+    returns empty results for the wrong type, so both calls are always made
+    and the non-empty one (or both during play-in overlap) is used.
+
     Returns (games_count, player_game_logs_count). Returns (0, 0) when
     no games were played on that date (off-season, rest day, API outage).
     """
     season = _date_to_season(game_date)
-    logger.info("[%s] fetching player game logs (season=%s)...", game_date, season)
+    client = get_client()
+    frames = []
+    for season_type in ("Regular Season", "Playoffs"):
+        logger.info("[%s] fetching player game logs (season=%s, type=%s)...", game_date, season, season_type)
+        part = client.get_player_game_logs_for_dates(game_date, game_date, season, season_type=season_type)
+        if not part.empty:
+            frames.append(part)
 
-    df = get_client().get_player_game_logs_for_dates(game_date, game_date, season)
-    if df.empty:
+    if not frames:
         logger.info("[%s] no games found — skipping ingest", game_date)
         return 0, 0
 
+    df = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["PLAYER_ID", "GAME_ID"])
     logger.info("[%s] fetched %d player-game rows", game_date, len(df))
 
     games_rows, valid_ids = derive_games(df)
