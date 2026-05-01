@@ -31,6 +31,7 @@ def get_engine() -> Engine:
     # GitHub secret UI) and remap the postgres:// scheme that Supabase emits
     # to the postgresql:// dialect SQLAlchemy 2.x requires.
     url = SUPABASE_DB_URL.strip().replace("postgres://", "postgresql://", 1)
+    logger.info("DB URL scheme+host: %s", url.split("@")[-1] if "@" in url else url[:30])
     return create_engine(
         url,
         pool_pre_ping=True,  # cheap liveness check; avoids stale-conn errors
