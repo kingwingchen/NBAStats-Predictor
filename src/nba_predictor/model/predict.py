@@ -9,6 +9,7 @@ picks it up with no code change.
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -48,7 +49,7 @@ def load_model(
     with get_engine().connect() as conn:
         row = conn.execute(
             text(
-                "SELECT run_id, artifact_path FROM model_runs "
+                "SELECT run_id, artifact_path, model_json FROM model_runs "
                 "WHERE stat = :stat ORDER BY trained_at DESC LIMIT 1"
             ),
             {"stat": stat},
@@ -60,9 +61,29 @@ def load_model(
             f"run `uv run python -m nba_predictor.model.train --stat {stat}` first."
         )
 
-    run_id, path_str = row
-    logger.info("Loading model [%s] from run_id=%d: %s", stat, run_id, path_str)
+    run_id, path_str, model_json = row
+    if model_json:
+        logger.info("Loading model [%s] from DB (run_id=%d)", stat, run_id)
+        return _load_from_json_str(model_json), run_id
+    logger.info("Loading model [%s] from file (run_id=%d): %s", stat, run_id, path_str)
     return _load_from_path(Path(path_str)), run_id
+
+
+def _load_from_json_str(json_str: str) -> XGBRegressor:
+    """Load an XGBoost model from its JSON string representation.
+
+    Writes to a temp file because XGBoost's Python API requires a file path.
+    The temp file is cleaned up before returning.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
+        f.write(json_str)
+        tmp_path = f.name
+    try:
+        model = XGBRegressor()
+        model.load_model(tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+    return model
 
 
 def _load_from_path(path: Path) -> XGBRegressor:

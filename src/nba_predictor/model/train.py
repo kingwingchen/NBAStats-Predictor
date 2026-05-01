@@ -249,15 +249,19 @@ def save_and_register(
     model.save_model(str(artifact_path))
     logger.info("Saved model artifact: %s", artifact_path)
 
+    # Store the JSON content in the DB so CI runners can load it without needing
+    # the file on disk — artifact_path is kept as a human-readable archive reference.
+    model_json = artifact_path.read_text()
+
     with get_engine().begin() as conn:
         conn.execute(
             text("""
                 INSERT INTO model_runs
                     (trained_at, train_end_date, cv_mae, baseline_mae, params_json,
-                     artifact_path, stat, residual_mean, residual_std)
+                     artifact_path, stat, residual_mean, residual_std, model_json)
                 VALUES
                     (:trained_at, :train_end_date, :cv_mae, :baseline_mae, :params_json,
-                     :artifact_path, :stat, :residual_mean, :residual_std)
+                     :artifact_path, :stat, :residual_mean, :residual_std, :model_json)
             """),
             {
                 "trained_at": datetime.now(UTC),
@@ -269,6 +273,7 @@ def save_and_register(
                 "stat": stat,
                 "residual_mean": residual_mean,
                 "residual_std": residual_std,
+                "model_json": model_json,
             },
         )
     logger.info(
